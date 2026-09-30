@@ -1,142 +1,248 @@
-# DeepTrace — Development Plan
+# DeepTrace — Technical Development Plan
 
-**Project:** DeepTrace — AI-Based Deepfake Detection System  
 **Repository:** `C0dEr8627/deeptrace`  
-**Target branch:** `main`  
-**Document status:** Proposed implementation plan  
-**Project type:** Semester-scale academic prototype
+**Branch:** `main`  
+**Status:** Technical implementation baseline  
+**Project type:** Semester-scale academic prototype  
+**Primary deliverable:** Browser-based image and video visual deepfake screening
 
-## 1. Purpose
+This document is the implementation contract for developers and coding agents. Use the specified stack, model, interfaces, and processing rules as the default. If a dependency version or dataset constraint forces a change, document the reason and update this plan before changing architecture.
 
-This document defines a practical, incremental plan for developing DeepTrace. The priority is to deliver a working and demonstrable image-and-video screening prototype without expanding into a large multimodal forensic platform.
+## 1. Product and engineering objective
 
-The plan is intentionally lightweight. Complete the image workflow first, then extend the same classifier to sampled video frames. Audio analysis, advanced temporal networks, and metadata-based authenticity decisions are outside the minimum viable product (MVP).
+DeepTrace accepts a still image or a short video, applies a learned visual classifier, and returns a manipulation score with an uncertainty-aware interpretation. The system is a screening aid, not a forensic verification tool. It does not establish provenance, identify a person, or prove that media is real or fake.
 
-## 2. Project objective
+The first release is deliberately single-modal: visual image classification, reused on sampled video frames. Do not implement audio, speech/voice-cloning detection, metadata-based authenticity decisions, identity recognition, live-stream analysis, or temporal neural networks in the MVP.
 
-Develop a web application that accepts an image or video, analyzes visual content with a fine-tuned pretrained image classifier, and presents a manipulation score with an uncertainty-aware interpretation.
+## 2. Locked MVP technology
 
-DeepTrace provides an automated screening signal. It must not claim to prove that media is authentic or manipulated, and its model score must not be described as a real-world probability unless calibration has been evaluated.
-
-## 3. MVP scope
-
-### Included
-- Upload one supported image or video.
-- Validate file type, size, and video processing limits.
-- Preprocess images consistently with the selected model.
-- Fine-tune a pretrained CNN (initial candidate: EfficientNet or ResNet).
-- Classify images.
-- Sample a bounded number of video frames and classify each with the image model.
-- Aggregate valid frame scores using a documented method.
-- Display a result category, model score, and basic frame-level evidence for video.
-- Evaluate with held-out data and report relevant metrics.
-- Document privacy, uncertainty, and known limitations.
-
-### Deferred
-- Audio and voice-cloning detection.
-- Dedicated temporal Transformer, LSTM, or 3D CNN.
-- Multi-model score fusion.
-- Metadata/provenance as a classifier signal.
-- Real-time analysis, user accounts, and production-scale infrastructure.
-- Forensic certainty or identity recognition.
-
-## 4. Proposed technology
-
-| Layer | Proposed technology | Purpose |
+| Area | Technology | Implementation decision |
 |---|---|---|
-| Language | Python | ML and backend |
-| ML framework | PyTorch, torchvision | Fine-tuning and inference |
-| Media processing | OpenCV, FFmpeg | Image decoding and video frame sampling |
-| Evaluation | scikit-learn | Metrics and evaluation utilities |
-| API | FastAPI | Upload and analysis endpoints |
-| Frontend | React | Upload and results interface |
-| Version control | Git and GitHub | Source and change tracking |
+| Primary language | Python 3.11 | Backend and ML code |
+| ML framework | PyTorch 2.x + torchvision 0.x | Training, transforms, checkpoint loading |
+| Baseline model | EfficientNet-B0, ImageNet-pretrained | One binary classifier; do not add model ensembles |
+| Numerical/data utilities | NumPy, pandas | Arrays, manifests and experiment records |
+| Evaluation | scikit-learn | Classification metrics, ROC/PR curves, confusion matrix |
+| Image/video decoding | OpenCV 4.x + FFmpeg | Decode images and sample video frames |
+| API | FastAPI + Pydantic v2 + Uvicorn | REST API and typed request/response schemas |
+| Multipart uploads | python-multipart | FastAPI upload parsing |
+| Frontend language | TypeScript | Browser application |
+| Frontend | React 18+ with Vite | Single-page application |
+| Frontend styling | CSS modules or project-level CSS | Responsive, accessible UI; no UI framework required for MVP |
+| HTTP client | Native Fetch API | Typed API client |
+| Frontend tests | Vitest + React Testing Library | Component and workflow tests |
+| Backend tests | pytest + httpx | Unit and API tests |
+| Formatting/linting | Ruff (Python), ESLint + Prettier (frontend) | Consistent code quality |
+| Version control | Git + GitHub | Main branch and reviewed commits |
+| Initial runtime | Local development machine | No cloud infrastructure required for MVP |
 
-Use a local development environment initially. GPU acceleration is helpful but not a prerequisite for all development; training and inference speed will depend on available hardware.
+Use compatible stable releases and pin exact resolved versions in `backend/requirements.txt` (or a lock file) and the frontend lock file. Avoid unpinned dependencies in reproducible runs. CUDA is optional; CPU must remain supported for inference and basic tests.
 
-## 5. Development phases
+## 3. Model and algorithm specification
 
-The sequence below is milestone-based rather than tied to fixed calendar weeks. Map the milestones to the remaining semester after confirming deadlines and team availability.
+### 3.1 Classification target
 
-| Phase | Work | Completion milestone |
+The model predicts two training classes:
+
+- `real`: authentic media examples from the selected dataset.
+- `fake`: media manipulated by one or more documented deepfake methods in that dataset.
+
+The class mapping must be centralized in configuration and stored with the checkpoint. Do not infer label meaning from folder order. Dataset-specific label normalization belongs in the data-preparation stage.
+
+### 3.2 Architecture
+
+Use **torchvision EfficientNet-B0 with ImageNet weights** as the only MVP model.
+
+- Load the torchvision pretrained EfficientNet-B0 weights.
+- Replace the final classifier linear layer with a single output logit.
+- Train with `BCEWithLogitsLoss` for binary classification.
+- Apply `sigmoid(logit)` at inference to produce a bounded model score for the configured `fake` class.
+- Use transfer learning: initially freeze the feature extractor and train the replacement head; then optionally unfreeze the final feature stages and fine-tune with a lower learning rate if validation results justify it.
+- Save a state-dict checkpoint, class mapping, architecture name, preprocessing configuration, training seed, and selected validation threshold metadata.
+
+Do not call the sigmoid output a calibrated probability. It is a model score unless calibration is separately evaluated.
+
+### 3.3 Input preprocessing
+
+All images and sampled video frames must use the same preprocessing pipeline:
+
+1. Decode safely and reject empty/corrupt inputs.
+2. Convert BGR (OpenCV) to RGB.
+3. Resize to **224 × 224** using the selected torchvision transform.
+4. Convert to a float tensor in `[0, 1]`.
+5. Normalize using ImageNet channel statistics: mean `[0.485, 0.456, 0.406]`, standard deviation `[0.229, 0.224, 0.225]`.
+6. Add a batch dimension and run inference under `torch.inference_mode()`.
+7. Return the fake-class sigmoid score as a Python float.
+
+For the baseline, classify the full decoded image/frame. Do not add face detection or face alignment until baseline performance is measured; these introduce an additional model, failure modes, and preprocessing decisions. Keep preprocessing implemented once and imported by both evaluation and serving code to prevent train/serve skew.
+
+### 3.4 Training baseline
+
+Initial reproducible baseline configuration (tune only through recorded experiments):
+
+| Parameter | Initial value |
+|---|---|
+| Input size | 224 × 224 RGB |
+| Batch size | 32, reduce if memory constrained |
+| Optimizer | AdamW |
+| Head learning rate | 1e-3 |
+| Fine-tuning learning rate | 1e-4 |
+| Weight decay | 1e-4 |
+| Epoch ceiling | 10 head-training epochs, then up to 5 fine-tuning epochs if justified |
+| Loss | BCEWithLogitsLoss |
+| Selection criterion | Validation PR-AUC; also inspect ROC-AUC and class-wise recall |
+| Early stopping | Stop after 3 epochs without validation improvement |
+| Seed | Fixed and recorded for each experiment |
+| Checkpoint | Best validation checkpoint, not final epoch by default |
+
+These are starting values, not guaranteed optimal hyperparameters. Track train/validation loss and metrics per epoch. Handle class imbalance using a documented sampler or positive-class weighting only when measured imbalance warrants it. Do not oversample or augment validation/test data.
+
+Training augmentation should be conservative and label-preserving: horizontal flip and mild brightness/contrast changes may be used on training images. Avoid aggressive blur, compression, cropping, or geometric transforms until their impact is tested, since manipulation artifacts may be altered. Validation and test transforms are deterministic.
+
+### 3.5 Dataset protocol
+
+Select a dataset whose license/access conditions permit the intended academic use. Candidate datasets may include FaceForensics++ or another approved deepfake image/video corpus, subject to availability and license review. The final dataset choice must be recorded in the experiment manifest; this plan does not assume that a particular dataset has been downloaded or approved.
+
+Maintain a CSV/Parquet manifest with at least:
+
+`sample_id, path_or_source_id, label, dataset, source_video_id, identity_group, split`
+
+- Keep source videos, identities, and derived frames grouped within a single split whenever metadata supports it.
+- Split into train, validation, and held-out test partitions before extracting or augmenting frames.
+- Prevent near-duplicate leakage; document grouping limitations if identity metadata is unavailable.
+- Keep datasets outside Git. Commit only scripts, manifests without sensitive local paths where appropriate, and non-restricted aggregate results.
+- Record dataset version, acquisition date, license, class counts, split seed, and exclusions.
+
+A random frame-level split is prohibited when multiple frames originate from the same source video.
+
+## 4. Video processing algorithm
+
+Video support reuses the trained image classifier; it is not temporal modeling.
+
+### 4.1 Initial processing limits
+
+Store limits in one backend configuration module so they can be adjusted without changing the API contract:
+
+- Maximum upload size: **100 MB**.
+- Maximum duration: **60 seconds**.
+- Maximum sampled frames: **16**.
+- Sampling: evenly spaced timestamps across the decodable video duration, excluding duplicate timestamps.
+- Maximum decoded frame dimension: resize frames to a maximum side of **1280 px** before classifier preprocessing.
+- Unsupported, malformed, empty, or over-limit media must return a typed client error without crashing the worker.
+
+These are conservative initial application limits for a semester prototype, not performance guarantees. Validate them on available hardware and revise them only with documented measurements.
+
+### 4.2 Frame sampling and aggregation
+
+1. Validate extension and detected media type; do not trust the filename alone.
+2. Open with OpenCV/FFmpeg and read duration, frame rate, width, and height where available.
+3. Generate up to 16 evenly spaced timestamps from the usable duration.
+4. Seek/decode each timestamp; discard failed or empty frames and record the timestamp of each accepted frame.
+5. Run each frame through the shared EfficientNet-B0 inference pipeline.
+6. Aggregate valid frame fake scores using the **arithmetic mean** as the initial video score.
+7. Return the number of requested and successfully analyzed frames, aggregate score, and per-frame timestamp/score entries.
+8. If no frame can be decoded, return a processing error. If fewer than 4 frames are valid, return an `uncertain` outcome with a reason rather than presenting a normal video classification.
+
+Do not average logits and sigmoid scores together; aggregate only the per-frame fake-class scores. Mean aggregation can dilute short manipulated segments and does not model temporal inconsistencies. State this limitation in the UI and report.
+
+## 5. Decision policy and result schema
+
+Let `s` be the fake-class model score in `[0, 1]`. Use two thresholds, `T_low` and `T_high`, selected on validation data and saved in model configuration:
+
+- `s < T_low`: `no_manipulation_detected`
+- `T_low <= s <= T_high`: `uncertain`
+- `s > T_high`: `potentially_manipulated`
+
+Choose thresholds using validation data to make the trade-off between false positives and false negatives explicit. Do not tune thresholds on the held-out test set or to improve a demo. If suitable thresholds cannot be justified, return `uncertain` rather than inventing cutoffs.
+
+Use careful user-facing text:
+- “No manipulation detected by this model”
+- “Uncertain — model output is inconclusive”
+- “Potentially manipulated — further verification recommended”
+
+The API response should be versioned and consistent. Suggested Pydantic response:
+
+```json
+{
+  "analysis_id": "uuid",
+  "media_type": "image",
+  "status": "completed",
+  "prediction": "uncertain",
+  "fake_score": 0.52,
+  "score_type": "uncalibrated_model_score",
+  "model": "efficientnet_b0",
+  "frames_analyzed": null,
+  "frame_results": [],
+  "warnings": ["This result is an automated screening signal, not forensic proof."]
+}
+```
+
+For video, `frames_analyzed` is an integer and `frame_results` contains timestamp and score objects. For images, `frames_analyzed` is null and `frame_results` is empty. Use explicit error response models with stable machine-readable codes.
+
+## 6. Backend design
+
+### 6.1 Responsibilities
+
+FastAPI owns HTTP validation, temporary file lifecycle, media routing, orchestration, and response serialization. ML modules own transforms, checkpoint loading, prediction, and model metadata. Keep HTTP concerns out of training and model code.
+
+Suggested endpoints:
+
+| Method | Path | Responsibility |
 |---|---|---|
-| 1. Scope and setup | Confirm supported formats, size/duration limits, repository structure, and dataset access. Establish a minimal Python environment. | Requirements and project skeleton are ready. |
-| 2. Dataset preparation | Select a permitted dataset, inspect labels, create a manifest, and split by source/identity where metadata allows. | Reproducible train/validation/test split exists. |
-| 3. Image model baseline | Load a pretrained CNN, replace its classifier head, fine-tune on the training split, and evaluate on validation/test data. | Image inference returns a score and documented metrics. |
-| 4. Video pipeline | Sample a limited number of frames, reuse image preprocessing and inference, and aggregate frame scores. | A video produces a bounded, repeatable analysis result. |
-| 5. Backend API | Implement upload validation, preprocessing orchestration, inference calls, response schemas, and cleanup. | API handles valid and invalid inputs safely. |
-| 6. Frontend | Build upload, processing, error, and result views; connect to the API. | A user can complete the end-to-end workflow in the browser. |
-| 7. Integration and testing | Test image/video paths, errors, limits, and repeatability; fix integration issues. | MVP acceptance criteria pass. |
-| 8. Evaluation and submission | Record metrics, test conditions, limitations, screenshots/demo, and project report material. | Reproducible results and final demonstration are ready. |
+| GET | `/api/health` | Process health and model-loaded status; no sensitive details |
+| GET | `/api/model-info` | Public model name, supported media, score semantics |
+| POST | `/api/analyze` | Multipart upload; analyze one image or video |
 
-**Schedule guidance:** If time is limited, prioritize phases 1–3 and 5–8 for a reliable image MVP. Treat video support as the next increment and avoid beginning optional research extensions until the core workflow is stable.
+`POST /api/analyze` accepts one `file` field. Return HTTP 200 for completed analysis, 400 for unsupported media, 413 for size/duration limits, and 422 for corrupt or unprocessable media. Use 500 only for unexpected server errors; never return stack traces to clients.
 
-## 6. Implementation workflow
+### 6.2 Inference lifecycle
 
-### 6.1 Dataset and experiment
-1. Review dataset access conditions and record the source and permitted use.
-2. Keep raw datasets outside the application repository unless redistribution is explicitly allowed.
-3. Create a manifest containing file path/reference, label, source, and identity/video grouping where available.
-4. Avoid leakage between splits by keeping related identities, source videos, and near-duplicate frames in one split wherever the dataset supports this.
-5. Record preprocessing, random seed, model version, hyperparameters, and checkpoint identifier.
+- Load the checkpoint once at application startup and reuse the model instance.
+- Set model to `eval()`; use `torch.inference_mode()`.
+- Select CUDA when available and configured; otherwise CPU.
+- Avoid loading a new model for each request.
+- Run CPU/GPU inference outside the async event loop using an appropriate threadpool/executor.
+- Begin with single-process local serving. Do not claim multi-user concurrency or production-scale throughput.
+- Add a configurable inference lock if the selected device/runtime requires serialized access.
+- Keep training scripts separate from the API process.
 
-### 6.2 Image classifier
-1. Start with one pretrained architecture (EfficientNet or ResNet; choose one for the baseline).
-2. Apply the model's expected resizing, color conversion, and normalization.
-3. Replace the final classification layer for the project labels.
-4. Fine-tune using the training split and monitor validation performance.
-5. Save the selected checkpoint and its configuration.
-6. Evaluate once on the held-out test split and preserve the results.
+### 6.3 Upload safety and privacy
 
-Do not select a model based only on training accuracy. Report failures and limitations as well as successful results.
+- Enforce size limits while streaming the upload, not only after fully reading it.
+- Generate a random temporary filename; never use the user-provided filename as a filesystem path.
+- Validate extension, MIME hint, and actual decoder result.
+- Store temporary media outside static/public directories.
+- Delete temporary media in a `finally` cleanup path on success and failure.
+- Do not log image/video bytes, local absolute paths, or unnecessary personal metadata.
+- Do not persist uploads or results in a database for the MVP.
+- Configure CORS only for the development frontend origin.
+- Limit concurrent analysis requests to avoid memory exhaustion.
 
-### 6.3 Video screening
-1. Validate duration and decodeability.
-2. Sample a configured maximum number of frames at a repeatable interval or evenly spaced timestamps.
-3. Run each valid frame through the same image pipeline.
-4. Aggregate frame scores using a fixed initial method, such as the mean.
-5. Return the number of frames analyzed and selected frame scores/timestamps where useful.
-6. Mark the result uncertain or return a safe processing error if insufficient frames are available.
+## 7. Frontend design
 
-Frame aggregation is a lightweight baseline, not true temporal modeling. It may miss short manipulated segments or inconsistencies between frames.
+Build a React + TypeScript single-page interface with these states:
 
-### 6.4 API and interface
-The backend should expose a small analysis endpoint, such as `POST /api/analyze`, and optionally `GET /api/health`. Return a consistent response containing media type, label, model score, score type, frames analyzed (for video), and a clear limitation notice.
+1. **Idle:** file picker, supported formats and limits.
+2. **Selected:** filename, type, size, remove/replace action.
+3. **Analyzing:** progress indicator and duplicate-submit prevention.
+4. **Completed:** result category, score with explicit “model score” wording, warning, and video frame summary.
+5. **Error:** readable message and retry path.
 
-The frontend should present:
-- File picker and supported format/size guidance.
-- Selected file information and processing state.
-- Result category and model score.
-- Frame-level information for video, if implemented.
-- Clear errors and a notice that automated output is not proof.
+Implementation requirements:
+- Use a typed API module around native `fetch` and `FormData`.
+- Do not manually set the multipart `Content-Type`; let the browser add its boundary.
+- Validate obvious client-side size/type issues for usability, while treating backend validation as authoritative.
+- Render server errors using stable error codes/messages; do not display raw stack traces.
+- Make keyboard navigation, visible focus, semantic labels, and responsive layouts part of the first UI pass.
+- Do not imply that a higher score is a calibrated probability.
+- Do not add authentication, history, cloud storage, or a database in the MVP.
 
-## 7. Result interpretation
+## 8. Repository layout
 
-Use uncertainty-aware labels rather than definitive “real” or “fake” claims. Configure lower and upper decision thresholds using validation data:
-
-- Below the lower threshold: **No manipulation detected by this model**
-- Between thresholds: **Uncertain**
-- Above the upper threshold: **Potentially manipulated**
-
-The thresholds must be selected and documented using validation results, not adjusted to favor a demonstration. Unless calibration is separately performed and validated, display the output as a **model manipulation score**, not a literal probability of fakery.
-
-## 8. Evaluation plan
-
-Evaluate on held-out data, with source/identity-aware separation wherever possible. Report:
-- Precision, recall, and F1-score.
-- ROC-AUC and PR-AUC.
-- False-positive and false-negative rates.
-- Confusion matrix.
-- Accuracy as a supplementary metric.
-
-Where resources permit, include a small generalization check across a different dataset, manipulation method, compression level, or resolution. Clearly state the test population and conditions; results from one dataset do not establish real-world reliability.
-
-## 9. Repository structure
-
-Keep the initial structure simple and expand only when implementation requires it.
+Use a small monorepo layout:
 
 ```text
-DeepTrace/
+deeptrace/
 ├── README.md
 ├── DEVELOPMENT_PLAN.md
 ├── docs/
@@ -145,46 +251,129 @@ DeepTrace/
 │   ├── DESIGN.md
 │   └── TEST_PLAN.md
 ├── backend/
-│   └── app/
+│   ├── requirements.txt
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── api/
+│   │   │   ├── routes.py
+│   │   │   └── schemas.py
+│   │   ├── core/
+│   │   │   └── config.py
+│   │   ├── services/
+│   │   │   ├── image_service.py
+│   │   │   └── video_service.py
+│   │   └── ml/
+│   │       ├── model.py
+│   │       ├── transforms.py
+│   │       └── predictor.py
+│   └── tests/
 ├── frontend/
-└── ml/
-    ├── prepare_data.py
-    ├── train.py
-    ├── evaluate.py
-    └── inference.py
+│   ├── package.json
+│   └── src/
+│       ├── api/
+│       ├── components/
+│       ├── pages/
+│       └── types/
+├── ml/
+│   ├── configs/
+│   ├── data/
+│   │   ├── build_manifest.py
+│   │   └── split_dataset.py
+│   ├── train.py
+│   ├── evaluate.py
+│   └── export_model.py
+├── artifacts/
+│   └── .gitkeep
+└── .gitignore
 ```
 
-Do not commit dataset media, uploaded user files, local environments, secrets, or large model checkpoints without an explicit storage and licensing decision.
+Keep raw media, virtual environments, caches, logs, secrets, and large checkpoints out of Git. Store model artifacts locally for development; decide on Git LFS or external artifact storage only if repository delivery requires distributing a checkpoint.
 
-## 10. Risks and mitigations
+## 9. Milestones and implementation order
 
-| Risk | Mitigation |
+| Milestone | Concrete output | Exit criteria |
+|---|---|---|
+| M0 — Repository foundation | Python/frontend skeleton, config, ignore rules, lint/test commands | Clean install and app health endpoint |
+| M1 — Data pipeline | Dataset documentation, manifest builder, grouped split, integrity checks | No known source-video leakage; class counts recorded |
+| M2 — Image baseline | EfficientNet-B0 training, checkpoint, inference CLI | Reproducible image score from saved checkpoint |
+| M3 — Evaluation | Held-out metrics, confusion matrix, threshold selection record | Metrics and limitations documented |
+| M4 — Image API | Upload validation, image decode, inference, typed response | Valid and invalid image API tests pass |
+| M5 — Video pipeline | Duration validation, bounded sampling, frame inference, mean aggregation | Repeatable bounded video analysis |
+| M6 — Frontend | Upload, analyzing, results, errors, accessibility | Browser workflow works against local API |
+| M7 — Hardening/demo | Cleanup, edge-case tests, demo media, report evidence | Acceptance checklist passes |
+
+Implement and validate the ML pipeline independently before integrating it with FastAPI. Complete image inference end-to-end before video. Do not start optional extensions until M0–M6 are stable.
+
+## 10. Evaluation and reproducibility
+
+Evaluate the final selected checkpoint once on a held-out test split. Report:
+
+- Precision, recall, F1-score for both classes.
+- ROC-AUC and PR-AUC.
+- Confusion matrix, false-positive rate, and false-negative rate.
+- Accuracy as a supplementary metric.
+- Per-class support and dataset/source composition.
+- Image results separately from video-level results.
+
+Use scikit-learn with a fixed class order. Save predictions and labels in a machine-readable file, along with model checkpoint hash, config, seed, dataset manifest version, and software versions. Do not report only accuracy. Where possible, evaluate on a second dataset or unseen manipulation/compression condition and describe the result as a limited generalization check.
+
+## 11. Test strategy
+
+### Unit tests
+- Label mapping and manifest validation.
+- RGB conversion, tensor shape, dtype, and normalization.
+- Checkpoint loading and finite score range.
+- Threshold boundary behavior.
+- Video timestamp generation, duplicate removal, and score aggregation.
+- API schema serialization and error-code mapping.
+
+### Integration tests
+- Valid image upload returns a completed response.
+- Valid short video returns bounded frame results.
+- Oversized, unsupported, corrupt, empty, and over-duration uploads are rejected.
+- Decoder failure and model-loading failure do not leak temporary files.
+- Frontend handles success, API errors, network failure, and repeated submission.
+
+Use small synthetic fixtures for routine CI tests. Keep real datasets and large model artifacts out of CI. Add a manual smoke test with representative real and manipulated samples, clearly marked as a demonstration rather than model validation.
+
+## 12. Operational configuration
+
+Keep adjustable values centralized, not scattered through route handlers:
+
+- Upload size, duration, frame cap, minimum valid frames.
+- Model artifact path, architecture identifier, device selection.
+- Image dimensions and normalization constants.
+- Decision thresholds and score semantics.
+- CORS development origins and concurrency limit.
+
+Fail fast at startup if the checkpoint is missing, incompatible, or has mismatched class/preprocessing metadata. Health status should distinguish process availability from model readiness.
+
+## 13. Risks and explicit non-goals
+
+| Risk | Engineering response |
 |---|---|
-| Limited time or compute | Transfer learning, one baseline model, bounded experiments and video frames. |
-| Dataset access or license restrictions | Verify terms before use; document sources and avoid unauthorized redistribution. |
-| Data leakage | Split by source/identity where possible and keep related frames grouped. |
-| Poor performance on unseen fakes | Evaluate generalization where feasible and state limitations clearly. |
-| Slow video processing | Restrict file size, duration, resolution, and sampled frame count. |
-| Misleading confidence | Use validation-selected thresholds, uncertainty labels, and careful score wording. |
-| Privacy concerns | Minimize upload retention, use temporary server-side files, and avoid logging media. |
-| Integration delays | Validate the model independently before connecting API and frontend. |
+| Dataset leakage | Group by source video/identity before split; document missing metadata |
+| Domain shift | Hold out sources and report dataset-specific limitations |
+| Model learns compression/background shortcuts | Inspect errors and test across available compression/source conditions |
+| CPU inference is slow | Keep input size and frame count bounded; measure latency |
+| Video frame mean misses short edits | Explain limitation; do not describe aggregation as temporal detection |
+| Uncalibrated score is misunderstood | Label as model score; use uncertain band and explanatory notice |
+| Upload security/privacy | Stream limits, random temp paths, cleanup, no media logging/persistence |
+| Limited compute/time | One pretrained EfficientNet-B0; small controlled experiments |
 
-## 11. MVP acceptance checklist
+Explicitly out of scope: audio detection, lip-sync analysis, face identity matching, facial landmark heuristics as authenticity proof, temporal CNN/Transformer/LSTM, ensemble fusion, blockchain/provenance verification, user accounts, persistent upload history, and production deployment scaling.
 
-- [ ] Project scope, formats, and processing limits are documented.
-- [ ] Dataset source, permitted use, labels, and split method are recorded.
-- [ ] Image classifier can load the saved checkpoint and return a finite score.
-- [ ] Held-out evaluation metrics are recorded.
-- [ ] Video sampling is bounded and repeatable.
-- [ ] Video scores are aggregated by a documented method.
-- [ ] API validates inputs and handles decode/inference failures safely.
-- [ ] Frontend supports upload, processing, errors, and results.
-- [ ] Uncertainty and model limitations are visible to users.
-- [ ] Temporary media is cleaned up according to the configured policy.
-- [ ] Final test evidence, known limitations, and demo steps are documented.
+## 14. Definition of done
 
-## 12. Change control
+The MVP is complete when:
 
-Keep the MVP scope stable during implementation. Any proposed extension should be assessed against remaining time, compute, measurable benefit, and impact on testing. Update this plan when scope or major technical decisions change.
+- The dataset source, access terms, class mapping, and split protocol are documented.
+- The EfficientNet-B0 checkpoint loads with its preprocessing metadata and returns finite fake-class scores.
+- Held-out evaluation results and threshold rationale are recorded.
+- The image API and browser flow work for valid and invalid inputs.
+- Video support, if included in the submitted scope, uses bounded repeatable sampling and documented mean aggregation.
+- Uploads are cleaned up on all normal and error paths.
+- UI wording clearly distinguishes a model screening score from proof or calibrated probability.
+- Tests, limitations, and a reproducible demonstration procedure are available in the repository.
 
-**Definition of done:** DeepTrace is considered complete for the semester prototype when a user can submit a supported image and, if video phase is completed, a supported video; receive a consistent uncertainty-aware result; and the team can demonstrate the workflow and explain its evaluation and limitations.
+**Change policy:** Treat the model, preprocessing, output semantics, and API contract above as the baseline. A coding agent must not silently substitute architectures, datasets, libraries, or algorithms. Propose material changes with their rationale, trade-offs, and documentation updates before implementation.
