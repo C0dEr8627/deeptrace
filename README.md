@@ -2,94 +2,70 @@
 
 **AI-Based Deepfake Detection System**
 
-DeepTrace is a semester-scale research prototype for identifying signs of facial
-manipulation in uploaded images and videos using a fine-tuned pretrained
-image classifier.
+DeepTrace is a semester-scale research prototype for screening uploaded images and videos for visual signs of manipulation using a fine-tuned pretrained image classifier. Its output is a model score, not forensic proof or a calibrated probability.
 
-> **Project status:** Proposed documentation and implementation plan.
-> Features described here are intended scope, not claims about an
-> already completed system.
+> **Status:** Repository foundation and dataset-preparation utilities are implemented. Model training, inference integration, and video analysis are not yet implemented.
 
-## Objective
+## MVP scope
 
-Build a minimal web application that accepts an image or video, analyzes
-visual content, and reports a manipulation-likelihood score with an
-uncertainty-aware result.
+- Image-first visual classification, followed by sampled-frame video analysis.
+- EfficientNet-B0 transfer learning with PyTorch and torchvision.
+- FastAPI backend and React + TypeScript + Vite frontend.
+- Held-out evaluation using precision, recall, F1, ROC-AUC, PR-AUC, and confusion matrix.
+- Uncertainty-aware result wording; no claims of forensic certainty.
 
-## Initial scope
+Audio analysis, temporal neural networks, identity recognition, metadata-based authenticity decisions, accounts, persistent history, and database storage are out of scope for the MVP.
 
--   Image upload and visual classification.
--   Video upload, frame sampling, frame-level classification, and score
-    aggregation.
--   A simple results interface showing the prediction, model score, and
-    sampled frames.
--   Evaluation using held-out data and standard classification metrics.
+## Technology
 
-## Out of scope for the first version
+- **Language:** Python 3.11 and TypeScript
+- **ML:** PyTorch 2.x, torchvision, EfficientNet-B0, scikit-learn, NumPy, pandas
+- **Media:** OpenCV and FFmpeg
+- **API:** FastAPI, Pydantic v2, Uvicorn
+- **Frontend:** React 18+, Vite, native Fetch API, CSS
+- **Tests and quality:** pytest, httpx, Vitest, React Testing Library, Ruff, ESLint, Prettier
+- **Database:** None for the MVP; uploads are temporary and results are returned directly to the client.
 
-Audio or voice-cloning analysis, advanced temporal neural networks,
-metadata-based authenticity decisions, real-time monitoring, identity
-recognition, and claims of forensic certainty.
+See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for the technical implementation contract.
 
-## Proposed technology
+## Dataset preparation
 
--   **ML:** Python, PyTorch, torchvision, scikit-learn
--   **Media processing:** OpenCV, FFmpeg
--   **API:** FastAPI
--   **Frontend:** React
--   **Model:** Pretrained EfficientNet or ResNet, fine-tuned for binary
-    classification
--   **Storage:** Temporary local storage for prototype uploads; database
-    only if required
+No dataset is bundled. Dataset access and usage terms must be reviewed before downloading or using any media. Preparation utilities and the canonical manifest format are documented in [ml/data/README.md](ml/data/README.md). The manifest validator and group-aware splitter are available under `ml/data/` to reduce source leakage between train, validation, and test sets.
 
-## High-level workflow
+## Repository structure
 
-1.  User uploads image/video.
-2.  Backend validates the file and preprocesses it.
-3.  Image is classified directly; video is sampled into frames.
-4.  The classifier returns scores for image/frame inputs.
-5.  Video scores are aggregated using a documented rule.
-6.  The interface displays a result with a caveat that model output is
-    not proof.
-
-## Responsible interpretation
-
-The output is a model score, not a guaranteed probability that media is
-fake. Performance may vary with compression, resolution, lighting,
-manipulation technique, and dataset distribution. The application should
-use "Potentially manipulated," "No manipulation detected by this model,"
-and "Uncertain" rather than asserting authenticity.
-
-## Suggested repository structure
-
-``` text
-DeepTrace/
+```text
+deeptrace/
 ├── backend/
-│   ├── app/
-│   │   ├── main.py
-│   │   ├── routes/
-│   │   ├── services/
-│   │   └── schemas/
-│   ├── models/
-│   └── tests/
+│   ├── app/{api,core,ml,services}/
+│   ├── tests/
+│   ├── requirements.txt
+│   └── pyproject.toml
 ├── frontend/
+│   ├── src/
+│   ├── package.json
+│   └── vite.config.ts
 ├── ml/
-│   ├── data/
-│   ├── notebooks/
-│   ├── train.py
-│   ├── evaluate.py
-│   └── inference.py
-├── docs/
-│   ├── SRS.md
-│   ├── ARCHITECTURE.md
-│   ├── DESIGN.md
-│   ├── TEST_PLAN.md
-│   └── PROJECT_PLAN.md
+│   └── data/
+│       ├── README.md
+│       ├── validate_manifest.py
+│       ├── split_dataset.py
+│       └── test_split_dataset.py
+├── artifacts/
+├── DEVELOPMENT_PLAN.md
 └── README.md
 ```
 
-## Run status
+## Local development
 
-Implementation commands and deployment instructions should be added
-after the development environment and actual implementation are
-finalized.
+See [backend/README.md](backend/README.md) for backend setup. For the frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+## Responsible interpretation
+
+DeepTrace is a research screening aid. Scores are uncalibrated model outputs unless calibration is independently demonstrated. Performance can vary with compression, resolution, lighting, manipulation method, and dataset distribution. Interpret results as signals for further review, not proof that media is authentic or manipulated.
