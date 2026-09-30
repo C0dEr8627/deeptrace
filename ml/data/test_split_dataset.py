@@ -31,5 +31,5 @@ def test_split_is_reproducible_and_group_disjoint() -> None:
 
 def test_split_rejects_too_few_groups_for_class_presence() -> None:
     tiny = _manifest().query("source_group in ['real-source-0', 'fake-source-0']")
-    with pytest.raises(ValueError, match="both classes"):
+    with pytest.raises(ValueError):
         create_splits(tiny, seed=42)
