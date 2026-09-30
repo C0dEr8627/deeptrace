@@ -64,3 +64,30 @@ When the manifest contains preassigned `test` rows, the splitter preserves them 
 For manifests without a preassigned test column, the existing group-aware 80/10/10 splitter remains available. Inspect and record per-split class counts before training. Never split extracted frames independently at frame level.
 
 Dataset files and generated manifests containing local paths should remain local and be excluded from Git.
+
+## Extract frames from the split videos
+
+Extract frames only after the video-level split is finalized. The extractor selects up to five evenly spaced frames per video and writes them under dataset/split/label folders. It creates a frame-level manifest that retains the source video ID, label, dataset, source group, and split. Extraction failures are written to a separate CSV; review them before training.
+
+The extractor uses OpenCV, NumPy, and pandas. With the project environment active, install OpenCV if it is not already available:
+
+```powershell
+python -m pip install opencv-python
+```
+
+Run a small smoke test first (the first 10 rows in the split manifest):
+
+```powershell
+$local = "C:\Users\UMAR\OneDrive\Desktop\deeptrace-local"
+python ml/data/extract_frames.py --manifest "$local\celebdf_v2_split.csv" --output-root "$local\frames" --output-manifest "$local\celebdf_v2_frames.csv" --frames-per-video 5 --limit-videos 10
+```
+
+Inspect several saved JPEGs and the generated frame manifest and failure report. If they look correct, run the same command without `--limit-videos 10` to process all videos. The extractor does not split frames, rebalance classes, or modify the source split. Re-running overwrites selected frame files and regenerates the output manifests.
+
+Run the helper tests from the repository root:
+
+```powershell
+python -m unittest discover -s ml/data -p "test_extract_frames.py"
+```
+
+Expected maximum frame count for the full Celeb-DF v2 manifest is 32,645 (6,529 videos × 5 frames); the actual count can be lower when videos cannot be decoded or contain fewer frames. Keep the frames and CSVs containing local absolute paths outside Git.
